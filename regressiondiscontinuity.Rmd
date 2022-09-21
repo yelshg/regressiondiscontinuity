@@ -1,0 +1,161 @@
+---
+title: "Parametric Regression Discontinuity Analysis"
+author: "Yelsh Gebreselassie"
+date: "2022-09-21"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    toc: yes
+---
+
+```{r Load-libraries-data, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(broom)
+library(rdrobust)
+library(rddensity)
+library(modelsummary)
+
+tutoring <- read.csv("data/tutoring_program.csv")
+attach(tutoring)
+```
+
+# Step 1: Determine if the process of assigning treatment is rule based
+
+- We know if a student is assigned to a tutoring program based 
+on certain rule if and only if we are familiar with the research process and the data. Looking at the dataset, we can see that only students who scored less that 70 are assigned to tutoring. 
+
+# Step 2: Determine if the design in fuzzy or sharp
+
+- This is to determine if, for example, a student who scored > 70 is using tutoring or a student who scored < 70 is not assigned to tutoring. 
+
+```{r fuzzy-or-sharp}
+ggplot(data = tutoring,
+       mapping = aes(x = entrance_exam, y = tutoring, color = tutoring)) +
+  geom_point(size = 0.5, alpha = 0.5, 
+             position = position_jitter(width = 0, height = 0.15), seed = 1234) +
+  geom_vline(xintercept = 70)
+```
+- We can see above that the line looks sharp. It doesn't look like anyone who scored above 70 is using tutoring or anyone who scored below 70 not using tutoring. We can also confirm this result numerically. 
+
+```{r}
+tutoring %>% 
+  group_by(tutoring, entrance_exam > 70) %>% 
+  summarize(count =n())
+```
+- We can see that all who have scored below 70 (241 students) have been assigned to tutoring and those who scored above 70 (759 students) have not been assigned to tutoring. 
+
+# Step 3: Check for discontinuity in running variable around cutpoint
+
+- This is to see if anyone is manipulating access to the entrance exam. For example, we need to make sure no one is purposely scoring a little over 70 to not be enrolled in the tutoring program or scoring just below 70 so they can be enrolled in tutoring. 
+
+
+```{r}
+ggplot(tutoring, aes(x = entrance_exam, fill = tutoring)) +
+  geom_histogram(binwidth = 2, boundary = 70, color = "white") +
+  geom_vline(xintercept = 70)
+```
+- There is a smooth transition at the cutoff point. We don't, for example, observe many students just to the left of the cutoff point and then a significant drop after. We can test this more officially using McCrary desnsity test. 
+
+
+
+```{r}
+rdplotdensity(rdd = rddensity(entrance_exam, c = 70),
+              X = entrance_exam,
+              type = "both") 
+
+```
+- We can see that there is some gap but it is within the confidence interval on both sides. 
+
+# Step 4: Check for discontinuity in outcome across running variable. 
+
+```{r}
+ggplot(tutoring, aes(x = entrance_exam, y = exit_exam, color = tutoring)) +
+  geom_vline(xintercept = 70) +
+  geom_point(size = 0.75, alpha = 0.5) + 
+  geom_smooth(data = filter(tutoring, entrance_exam < 70), method = lm) +
+  geom_smooth(data = filter(tutoring, entrance_exam > 70), method = lm)
+```
+
+Next we measure the gap.  
+
+# Step 5: Measure the size of the effect
+
+Parametric measurement 
+
+```{r}
+tutoring_centered <- tutoring %>% 
+  mutate(entrance_centered = entrance_exam - 70)
+```
+This will produce a new dataset called tutoring_centered with a new variable or column entrance_centered which shows how many points above or below a student scored. 
+
+Then we can run a regression model to measure the gap. 
+
+```{r}
+model_simple <- lm(exit_exam ~ entrance_centered + tutoring, 
+                   data = tutoring_centered)
+tidy(model_simple)
+```
+- We can interpret this as people who did not get tutoring and scored exactly 70 (meaning when entrance_centered = 0), their average exit exam score is 59. The entrance_centered coefficient which is 0.51 can be interpreted as, every time for a one point increase in score in the entrance exam, a student's exit exam score is increased by half a point. tutoringTRUE's coefficient which is 10.9 is saying that when tutored, s student's exit exam score increase by 10.9 on average. 
+
+```{r}
+ggplot(tutoring, aes(x = entrance_exam, y = exit_exam, color = tutoring)) +
+  geom_vline(xintercept = 70) +
+  geom_point(size = 0.75, alpha = 0.5) + 
+  geom_smooth(data = filter(tutoring, 
+                            entrance_exam < 70,
+                            entrance_exam >=60), 
+              method = "lm") +
+  geom_smooth(data = filter(tutoring, 
+                            entrance_exam > 70,
+                            entrance_exam <=80), 
+              method = "lm") 
+  
+  
+```
+
+```{r}
+model_bw10 <- lm(exit_exam ~ entrance_centered + tutoring, 
+                   data = filter(tutoring_centered,
+                                 entrance_centered <= 10,
+                                 entrance_centered >= -10))
+tidy(model_bw10)
+```
+```{r}
+model_bw5 <- lm(exit_exam ~ entrance_centered + tutoring, 
+                   data = filter(tutoring_centered,
+                                 entrance_centered <= 5,
+                                 entrance_centered >= -5))
+tidy(model_bw5)
+```
+```{r}
+ggplot(tutoring, aes(x = entrance_exam, y = exit_exam, color = tutoring)) +
+  geom_vline(xintercept = 70) +
+  geom_point(size = 0.75, alpha = 0.5) + 
+  geom_smooth(data = filter(tutoring, 
+                            entrance_exam < 70,
+                            entrance_exam >=60), 
+              method = "lm") +
+  geom_smooth(data = filter(tutoring, 
+                            entrance_exam > 70,
+                            entrance_exam <=80), 
+              method = "lm") + 
+  geom_smooth(data = filter(tutoring, 
+                            entrance_exam < 70,
+                            entrance_exam >=65), 
+              method = "lm") +
+  geom_smooth(data = filter(tutoring, 
+                            entrance_exam > 70,
+                            entrance_exam <=75), 
+              method = "lm")
+  
+  
+```
+
+# Step 6: Compare all the effects
+
+
+```{r}
+modelsummary(list(model_simple, model_bw10, model_bw5))
+```
+
